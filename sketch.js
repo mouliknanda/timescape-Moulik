@@ -15,7 +15,7 @@ const SNAPSHOT_EXITING = 3;  // Fade out trails, fade in background
 
 let stars = [];
 
-let showDebug = true;
+let showDebug = false;
 let snapshotState = SNAPSHOT_IDLE;
 let snapshotStart = 0;
 let transitionStart = 0;
@@ -23,6 +23,8 @@ let snapshotCooldown = 0; // Cooldown to prevent spamming snapshots
 let fistHoldStart = 0; // Timer for gesture hold
 let activeFistHand = null; // Track which hand is holding the fist
 let snapshotCounter = 1; // Persistent snapshot counter
+
+let handPresenceLevel = 0; // 0-100, smooth fade based on hand tracking
 
 let sceneOpacity = 100; // 0-100 (HSB Alpha)
 let artLayer; // Off-screen buffer for clean snapshots
@@ -46,8 +48,6 @@ function setup() {
   createCanvas(windowWidth, windowHeight, WEBGL);
   colorMode(HSB, 360, 100, 100, 100);
   scaleFactor = min(width, height) / 4;
-
-  scale(1.8, 1)
 
   // Setup video and handPose
   // Request HD resolution (1280x720) or best available
@@ -186,24 +186,50 @@ function draw() {
   // 4. Interaction & Hands
   updateInteraction();
 
-  if (sceneOpacity > 0) {
-    drawHands(sceneOpacity);
+  // Smooth Hand Presence Level
+  // If hands detected, fade in fast. If lost, fade out slow.
+  let targetPresence = (hands.length > 0) ? 100 : 0;
+  if (targetPresence > handPresenceLevel) {
+    handPresenceLevel = lerp(handPresenceLevel, targetPresence, 0.2); // Fast fade in
+  } else {
+    handPresenceLevel -= 2; // Slow linear fade out (approx 1 sec from 100 to 0 @ 60fps)
+  }
+  handPresenceLevel = constrain(handPresenceLevel, 0, 100);
 
-    // Draw Progress Circle if holding fist
-    if (fistHoldStart > 0 && activeFistHand) {
-      drawFistProgress(activeFistHand);
+  // Combined Opacity for Draw
+  // sceneOpacity handles Snapshot transitions. handPresenceLevel handles tracking loss.
+  let finalOpacity = (sceneOpacity / 100) * (handPresenceLevel / 100) * 100;
+
+  if (finalOpacity > 0.5) {
+    if (hands.length > 0) {
+      drawHands(finalOpacity);
+      // Draw Progress Circle only if actively holding fist and hands are tracked
+      if (fistHoldStart > 0 && activeFistHand) {
+        drawFistProgress(activeFistHand);
+      }
+    } else {
+      // Optional: Can verify if we want to show "ghost" hands fading out.
+      // User asked for Tesseract fade out. Usually hands fading out too looks better.
+      // We can draw hands using the LAST KNOWN positions if we wanted, but 'hands' array is empty when lost.
+      // So we can't draw hands if hands.length == 0 unless we cache them.
+      // For now, let's just let the Tesseract fade out. The Hands will disappear instantly (as they are the input),
+      // but the Tesseract (the output) will linger.
     }
   }
 
   // 5. Draw Tesseract (Live View)
   if (snapshotState !== SNAPSHOT_ACTIVE) {
-    if (hands.length > 0 && sceneOpacity > 0) {
+    if (finalOpacity > 0.5) {
       drawingContext.clear(drawingContext.DEPTH_BUFFER_BIT);
-      drawTesseract(null, sceneOpacity);
+      // Pass the smooth opacity
+      // We don't pass 'null' for pg?? Wait, drawTesseract check: function drawTesseract(pg, opacity = 100)
+      drawTesseract(null, finalOpacity);
     }
   }
 
-  if (snapshotState === SNAPSHOT_IDLE && hands.length === 0) {
+  // Only allow Orbit Control if completely idle and fully faded out
+  // This prevents the camera from snapping back to mouse control while fading out
+  if (snapshotState === SNAPSHOT_IDLE && hands.length === 0 && handPresenceLevel <= 0.5) {
     orbitControl();
   }
 
